@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+.streamlit/secrets.toml
+.DS_Store
+Thumbs.db
+~$*.xlsx
+
+# Dataset mentah tidak di-commit; dashboard memakai data/coffee_sales.parquet
+data/*.xlsx
+data/*.csv

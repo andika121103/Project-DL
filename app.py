@@ -1,0 +1,230 @@
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+
+from src import processing as P
+
+st.set_page_config(page_title="Dashboard Tren Penjualan Coffee Shop", page_icon="☕", layout="wide")
+
+BLUE = "#2a78d6"
+STORE_COLORS = {"Astoria": "#2a78d6", "Hell's Kitchen": "#eb6834", "Lower Manhattan": "#1baf7a"}
+MUTED = "#8a8985"
+SEQ = "Blues"
+
+
+def usd(x: float) -> str:
+    return f"${x:,.2f}"
+
+
+def tgl(d) -> str:
+    return f"{d.day} {P.BULAN[d.month - 1]} {d.year}"
+
+
+def style(fig, y_money=True, height=380):
+    fig.update_layout(height=height, margin=dict(l=10, r=10, t=90, b=10), title_y=0.97,
+                      plot_bgcolor="rgba(0,0,0,0)", hovermode="x unified" if fig.data and fig.data[0].type == "scatter" else "closest",
+                      legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0, title=None))
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(gridcolor="rgba(128,128,128,0.2)", zeroline=False)
+    if y_money:
+        fig.update_yaxes(tickprefix="$", tickformat=",.0f")
+    return fig
+
+
+def show(fig):
+    st.plotly_chart(fig, width="stretch")
+
+
+def insight(*lines):
+    st.info("**Insight:** " + " ".join(lines).replace("$", r"\$"))  # cegah $...$ dibaca sebagai LaTeX
+
+
+# ---------------- Data & filter ----------------
+df = P.get_data()
+
+st.sidebar.header("Filter")
+dmin, dmax = df["tanggal"].min().date(), df["tanggal"].max().date()
+rng = st.sidebar.date_input("Rentang tanggal", (dmin, dmax), min_value=dmin, max_value=dmax)
+start, end = (rng[0], rng[-1]) if isinstance(rng, (tuple, list)) and rng else (dmin, dmax)
+stores = st.sidebar.multiselect("Cabang", sorted(df["store_location"].unique()),
+                                default=sorted(df["store_location"].unique()))
+cats = st.sidebar.multiselect("Kategori produk", sorted(df["product_category"].unique()),
+                              default=sorted(df["product_category"].unique()))
+
+f = df[df["tanggal"].between(pd.Timestamp(start), pd.Timestamp(end))
+       & df["store_location"].isin(stores) & df["product_category"].isin(cats)]
+
+st.title("☕ Dashboard Tren Penjualan Coffee Shop")
+st.caption(f"Maven Roasters · 3 cabang di New York City · {tgl(start)} – {tgl(end)}")
+
+if f.empty:
+    st.warning("Tidak ada data untuk kombinasi filter ini. Silakan ubah rentang tanggal, cabang, atau kategori.")
+    st.stop()
+
+harian, mingguan, bulanan = P.per_hari(f), P.per_minggu(f), P.per_bulan(f)
+cabang, cabang_bulan = P.per_cabang(f), P.per_cabang_bulan(f)
+kategori, top10 = P.per_kategori(f), P.top_produk(f)
+by_hari, by_jam, heat = P.per_hari_nama(f), P.per_jam(f), P.heatmap_hari_jam(f)
+
+# ---------------- KPI ----------------
+mom = P.mom_bulan_lengkap(bulanan, start, end)
+k = st.columns(5)
+k[0].metric("Total Revenue", usd(f["revenue"].sum()))
+k[1].metric("Jumlah Transaksi", f"{len(f):,}")
+k[2].metric("Rata-rata per Transaksi", usd(P.avg_transaction_value(f)))
+k[3].metric("Total Item Terjual", f"{int(f['transaction_qty'].sum()):,}")
+if mom:
+    k[4].metric(f"Pertumbuhan MoM ({mom[1]} vs {mom[2]})", f"{mom[0]:+.1f}%",
+                help="Hanya membandingkan bulan yang seluruh harinya tercakup dalam rentang filter.")
+else:
+    k[4].metric("Pertumbuhan MoM", "—")
+    k[4].caption("Butuh minimal 2 bulan penuh dalam rentang tanggal.")
+
+tabs = st.tabs(["📈 Tren Penjualan", "🏪 Perbandingan Cabang", "🕒 Pola Waktu", "🥐 Produk", "📋 Data"])
+
+# ---------------- Tab 1 ----------------
+with tabs[0]:
+    gran = st.radio("Granularitas", ["Harian", "Mingguan", "Bulanan"], horizontal=True)
+    if gran == "Harian":
+        fig = px.line(harian, x="tanggal", y="revenue", title="Revenue Harian & Moving Average 7 Hari",
+                      color_discrete_sequence=[BLUE], labels={"tanggal": "Tanggal", "revenue": "Revenue"})
+        fig.data[0].name, fig.data[0].showlegend = "Revenue harian", True
+        fig.data[0].line.width = 1
+        fig.data[0].opacity = 0.5
+        fig.add_scatter(x=harian["tanggal"], y=harian["ma7"], name="Moving average 7 hari",
+                        line=dict(color=BLUE, width=2.5))
+    elif gran == "Mingguan":
+        fig = px.line(mingguan, x="minggu", y="revenue", markers=True, title="Revenue Mingguan",
+                      color_discrete_sequence=[BLUE], labels={"minggu": "Minggu mulai", "revenue": "Revenue"})
+    else:
+        fig = px.line(bulanan, x="nama_bulan", y="revenue", markers=True, title="Revenue Bulanan",
+                      color_discrete_sequence=[BLUE], labels={"nama_bulan": "Bulan", "revenue": "Revenue"})
+    fig.update_traces(hovertemplate="%{y:$,.2f}")
+    show(style(fig))
+
+    full = bulanan["bulan"].isin(P.bulan_lengkap(start, end))
+    mom_ok = P.mom_pct_lengkap(bulanan, start, end)
+    lbl = [usd(r) + ("" if pd.isna(m) else f"<br>{m:+.1f}% MoM") for r, m in zip(bulanan["revenue"], mom_ok)]
+    xb = bulanan.assign(nama_bulan=bulanan["nama_bulan"].astype(str) + full.map({True: "", False: " (sebagian)"}))
+    fig = px.bar(xb, x="nama_bulan", y="revenue", text=lbl, title="Revenue per Bulan (dengan pertumbuhan MoM)",
+                 color_discrete_sequence=[BLUE], labels={"nama_bulan": "Bulan", "revenue": "Revenue"})
+    fig.update_traces(textposition="outside", hovertemplate="%{x}: %{y:$,.2f}<extra></extra>", cliponaxis=False,
+                      marker_opacity=full.map({True: 1.0, False: 0.35}).tolist())
+    show(style(fig, height=420))
+    if not full.all():
+        st.caption("Bulan bertanda *(sebagian)* hanya tercakup sebagian oleh rentang tanggal: batangnya dipudarkan "
+                   "dan MoM hanya ditampilkan untuk bulan lengkap yang bulan sebelumnya juga lengkap.")
+
+    best_m = bulanan.loc[bulanan["revenue"].idxmax()]
+    best_d = harian.loc[harian["revenue"].idxmax()]
+    lines = [f"Bulan dengan revenue tertinggi adalah **{best_m['nama_bulan']}** ({usd(best_m['revenue'])})."]
+    if len(bulanan) > 1:
+        first, last = bulanan.iloc[0], bulanan.iloc[-1]
+        lines.append(f"Dari {first['nama_bulan']} ke {last['nama_bulan']} revenue berubah "
+                     f"**{(last['revenue'] / first['revenue'] - 1) * 100:+.1f}%**.")
+    lines.append(f"Hari dengan penjualan tertinggi: **{tgl(best_d['tanggal'])}** ({usd(best_d['revenue'])}).")
+    insight(*lines)
+
+# ---------------- Tab 2 ----------------
+with tabs[1]:
+    c1, c2 = st.columns([3, 2])
+    fig = px.line(cabang_bulan, x="nama_bulan", y="revenue", color="store_location", markers=True,
+                  color_discrete_map=STORE_COLORS, title="Tren Revenue Bulanan per Cabang",
+                  labels={"nama_bulan": "Bulan", "revenue": "Revenue", "store_location": "Cabang"})
+    fig.update_traces(hovertemplate="%{y:$,.2f}")
+    with c1:
+        show(style(fig))
+    fig = px.bar(cabang, x="store_location", y="revenue", color="store_location", text=cabang["revenue"].map(usd),
+                 color_discrete_map=STORE_COLORS, title="Total Revenue per Cabang",
+                 labels={"store_location": "Cabang", "revenue": "Revenue"})
+    fig.update_traces(textposition="outside", cliponaxis=False, hovertemplate="%{x}: %{y:$,.2f}<extra></extra>")
+    with c2:
+        show(style(fig).update_layout(showlegend=False))
+
+    top, bot = cabang.iloc[0], cabang.iloc[-1]
+    lines = [f"Cabang dengan revenue tertinggi adalah **{top['store_location']}** ({usd(top['revenue'])}, "
+             f"{top['revenue'] / cabang['revenue'].sum() * 100:.1f}% dari total)."]
+    if len(cabang) > 1:
+        lines.append(f"Selisihnya dengan cabang terendah ({bot['store_location']}) sebesar {usd(top['revenue'] - bot['revenue'])}.")
+    atv = (cabang.assign(atv=cabang["revenue"] / cabang["transaksi"]).sort_values("atv", ascending=False).iloc[0])
+    lines.append(f"Rata-rata nilai per transaksi tertinggi ada di **{atv['store_location']}** ({usd(atv['atv'])}).")
+    insight(*lines)
+
+# ---------------- Tab 3 ----------------
+with tabs[2]:
+    fig = px.imshow(heat, color_continuous_scale=SEQ, aspect="auto", title="Heatmap Revenue: Hari × Jam",
+                    labels=dict(x="Jam", y="Hari", color="Revenue"))
+    fig.update_traces(hovertemplate="%{y}, jam %{x}:00<br>%{z:$,.2f}<extra></extra>", xgap=2, ygap=2)
+    fig.update_xaxes(dtick=1)
+    show(style(fig, y_money=False, height=420).update_coloraxes(colorbar_tickprefix="$", colorbar_tickformat=",.0f"))
+
+    c1, c2 = st.columns(2)
+    fig = px.bar(by_hari, x="hari", y="revenue", title="Revenue per Hari", color_discrete_sequence=[BLUE],
+                 labels={"hari": "Hari", "revenue": "Revenue"})
+    fig.update_traces(hovertemplate="%{x}: %{y:$,.2f}<extra></extra>")
+    with c1:
+        show(style(fig))
+    fig = px.bar(by_jam, x="jam", y="revenue", title="Revenue per Jam", color_discrete_sequence=[BLUE],
+                 labels={"jam": "Jam", "revenue": "Revenue"})
+    fig.update_traces(hovertemplate="Jam %{x}:00: %{y:$,.2f}<extra></extra>")
+    fig.update_xaxes(dtick=1)
+    with c2:
+        show(style(fig))
+
+    bj, bh = by_jam.loc[by_jam["revenue"].idxmax()], by_hari.loc[by_hari["revenue"].idxmax()]
+    lh = by_hari.loc[by_hari["revenue"].idxmin()]
+    pagi = f.loc[f["jam"].between(7, 10), "revenue"].sum() / f["revenue"].sum() * 100
+    insight(f"Jam tersibuk adalah **{int(bj['jam']):02d}:00–{int(bj['jam']) + 1:02d}:00** ({usd(bj['revenue'])}).",
+            f"Hari dengan revenue tertinggi **{bh['hari']}**, terendah **{lh['hari']}**.",
+            f"Sekitar **{pagi:.1f}%** revenue terjadi pada jam 07:00–10:59 (puncak pagi).")
+
+# ---------------- Tab 4 ----------------
+with tabs[3]:
+    c1, c2 = st.columns(2)
+    fig = px.bar(kategori.sort_values("revenue"), x="revenue", y="product_category", orientation="h",
+                 title="Revenue per Kategori Produk", color_discrete_sequence=[BLUE],
+                 labels={"product_category": "Kategori", "revenue": "Revenue"})
+    fig.update_traces(hovertemplate="%{y}: %{x:$,.2f}<extra></extra>")
+    fig = style(fig, y_money=False).update_xaxes(tickprefix="$", tickformat=",.0f", showgrid=True,
+                                                gridcolor="rgba(128,128,128,0.2)")
+    with c1:
+        show(fig)
+    fig = px.bar(top10.sort_values("revenue"), x="revenue", y="product_detail", orientation="h",
+                 title="Top 10 Produk (Revenue)", color_discrete_sequence=[BLUE], hover_data=["product_category"],
+                 labels={"product_detail": "Produk", "revenue": "Revenue", "product_category": "Kategori"})
+    fig = style(fig, y_money=False).update_xaxes(tickprefix="$", tickformat=",.0f", showgrid=True,
+                                                gridcolor="rgba(128,128,128,0.2)")
+    with c2:
+        show(fig)
+
+    tm = P.per_kategori_tipe(f)
+    fig = px.treemap(tm, path=[px.Constant("Semua"), "product_category", "product_type"], values="revenue",
+                     color="revenue", color_continuous_scale=SEQ, title="Treemap Revenue: Kategori → Tipe Produk")
+    fig.update_traces(hovertemplate="%{label}<br>%{value:$,.2f}<br>%{percentRoot:.1%} dari total<extra></extra>",
+                      texttemplate="%{label}<br>%{value:$,.0f}")
+    show(style(fig, y_money=False, height=520).update_coloraxes(showscale=False))
+
+    kc, tp = kategori.iloc[0], top10.iloc[0]
+    insight(f"Kategori **{kc['product_category']}** menyumbang revenue terbesar "
+            f"({usd(kc['revenue'])}, {kc['revenue'] / kategori['revenue'].sum() * 100:.1f}%).",
+            f"Produk terlaris berdasarkan revenue adalah **{tp['product_detail']}** ({usd(tp['revenue'])}).",
+            f"Top 10 produk menyumbang {top10['revenue'].sum() / f['revenue'].sum() * 100:.1f}% dari total revenue.")
+
+# ---------------- Tab 5 ----------------
+with tabs[4]:
+    tables = {
+        "Revenue harian": harian, "Revenue mingguan": mingguan, "Revenue bulanan (MoM)": bulanan,
+        "Cabang per bulan": cabang_bulan, "Total per cabang": cabang, "Per kategori": kategori,
+        "Top 10 produk": top10, "Per hari": by_hari, "Per jam": by_jam,
+        "Heatmap hari × jam": heat.rename(columns=lambda j: f"{j:02d}:00").reset_index(),
+    }
+    name = st.selectbox("Pilih tabel agregasi", list(tables))
+    t = tables[name]
+    money = {c: st.column_config.NumberColumn(format="dollar") for c in ["revenue", "ma7"] if c in t}
+    if "mom_pct" in t:
+        money["mom_pct"] = st.column_config.NumberColumn("MoM %", format="%.1f%%")
+    st.dataframe(t, width="stretch", hide_index=True, column_config=money)
+    st.download_button("⬇️ Download CSV", t.to_csv(index=False).encode("utf-8"),
+                       file_name=f"{name.lower().replace(' ', '_').replace('×', 'x')}.csv", mime="text/csv")
+    insight(f"Data terfilter berisi {len(f):,} transaksi pada {f['tanggal'].nunique()} hari aktif.",
+            f"Rata-rata revenue harian {usd(harian['revenue'].mean())} dan rata-rata {harian['transaksi'].mean():,.0f} transaksi per hari.")

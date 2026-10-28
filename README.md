@@ -27,14 +27,23 @@ dalam dashboard interaktif berbasis **Streamlit + Plotly**, yang berisi:
 analisis-data-kelompok04/
 ├── data/
 │   ├── coffee_sales.parquet     # dataset siap pakai (dibaca dashboard, cepat)
-│   └── Coffee Shop Sales.xlsx   # dataset asli dari Kaggle (fallback, tidak di-commit)
+│   ├── Coffee Shop Sales.xlsx   # dataset asli dari Kaggle (fallback, tidak di-commit)
+│   ├── forecast_results.parquet # prediksi test Juni ketiga model (dibaca tab Prediksi)
+│   ├── model_metrics.csv        # MAE/RMSE/MAPE per model × cabang
+│   ├── lstm_loss.csv            # riwayat loss train vs validation LSTM
+│   └── rf_tuning.json           # parameter terbaik Random Forest hasil TimeSeriesSplit
+├── models/                      # random_forest.joblib, lstm.pt, lstm_config.json, lstm_loss.png
 ├── src/
-│   └── processing.py            # load, cleaning, feature engineering, agregasi
+│   ├── processing.py            # load, cleaning, feature engineering, agregasi
+│   └── forecasting.py           # forecasting per jam: seasonal naive, Random Forest, LSTM
 ├── notebooks/
-│   └── eda.ipynb                # analisis langkah demi langkah (bahan laporan)
+│   ├── eda.ipynb                # analisis langkah demi langkah (bahan laporan)
+│   └── modeling.ipynb           # penjelasan & hasil Machine Learning / Deep Learning
 ├── .streamlit/config.toml       # warna tema dashboard
 ├── app.py                       # dashboard Streamlit
-├── requirements.txt
+├── train_models.py              # latih ulang semua model dari awal
+├── requirements.txt             # untuk dashboard / deploy (tanpa torch)
+├── requirements-train.txt       # untuk training (torch CPU, scikit-learn)
 └── README.md
 ```
 
@@ -78,6 +87,32 @@ python -m src.processing
 ```
 
 Notebook analisis: buka `notebooks/eda.ipynb` dengan Jupyter / VS Code, lalu jalankan semua sel (*Run All*).
+
+## Machine Learning & Deep Learning: forecasting revenue per jam
+
+Tugas: memprediksi revenue **1 jam ke depan per cabang**. Train Januari–Mei 2023 (2 minggu terakhir = validation LSTM),
+test Juni 2023, split berdasarkan waktu.
+
+| Model | Jenis | MAE/jam | RMSE/jam | MAPE/hari |
+|---|---|---|---|---|
+| Seasonal naive (jam yang sama 7 hari lalu) | baseline | \$70,60 | \$99,63 | 17,9% |
+| **Random Forest** (scikit-learn, tuned) | Machine Learning | **\$40,03** | **\$58,62** | **9,5%** |
+| LSTM (PyTorch, CPU) | Deep Learning | \$41,22 | \$59,55 | 10,4% |
+
+Random Forest sedikit lebih baik dari LSTM, dan keduanya jauh lebih baik dari baseline. Hyperparameter Random Forest
+di-*tuning* dengan grid search + `TimeSeriesSplit` (5 fold) di data train saja; terpilih `n_estimators=300, max_depth=10,
+min_samples_leaf=5`, tapi RMSE test per jam hanya turun dari \$58,69 ke \$58,62. Penjelasan lengkap ada di
+`notebooks/modeling.ipynb`. Training deterministik (seed tetap, `n_jobs=1` di Random Forest), jadi hasilnya identik setiap dijalankan.
+
+Melatih ulang, termasuk tuning (±80 detik di CPU):
+
+```bash
+pip install -r requirements-train.txt
+python train_models.py
+```
+
+Hasilnya ditulis ke `data/forecast_results.parquet`, `data/model_metrics.csv`, `data/lstm_loss.csv`, `data/rf_tuning.json`, dan folder `models/`.
+Tab **Prediksi** di dashboard hanya membaca file-file tersebut, jadi deploy tidak membutuhkan torch/scikit-learn.
 
 ## Deploy ke Streamlit Community Cloud
 

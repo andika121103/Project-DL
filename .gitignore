@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-.venv/
+.venv*/
 venv/
 .ipynb_checkpoints/
 .streamlit/secrets.toml
@@ -11,3 +11,6 @@ Thumbs.db
 # Dataset mentah tidak di-commit; dashboard memakai data/coffee_sales.parquet
 data/*.xlsx
 data/*.csv
+# Hasil model dibutuhkan dashboard saat deploy
+!data/model_metrics.csv
+!data/lstm_loss.csv

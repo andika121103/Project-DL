@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -9,6 +11,7 @@ st.set_page_config(page_title="Dashboard Tren Penjualan Coffee Shop", page_icon=
 BLUE = "#2a78d6"
 STORE_COLORS = {"Astoria": "#2a78d6", "Hell's Kitchen": "#eb6834", "Lower Manhattan": "#1baf7a"}
 MUTED = "#8a8985"
+MODEL_COLORS = {"Aktual": BLUE, "Seasonal Naive": MUTED, "Random Forest": "#eb6834", "LSTM": "#1baf7a"}
 SEQ = "Blues"
 
 
@@ -80,7 +83,7 @@ else:
     k[4].metric("Pertumbuhan MoM", "—")
     k[4].caption("Butuh minimal 2 bulan penuh dalam rentang tanggal.")
 
-tabs = st.tabs(["📈 Tren Penjualan", "🏪 Perbandingan Cabang", "🕒 Pola Waktu", "🥐 Produk", "📋 Data"])
+tabs = st.tabs(["📈 Tren Penjualan", "🏪 Perbandingan Cabang", "🕒 Pola Waktu", "🥐 Produk", "📋 Data", "🔮 Prediksi"])
 
 # ---------------- Tab 1 ----------------
 with tabs[0]:
@@ -228,3 +231,75 @@ with tabs[4]:
                        file_name=f"{name.lower().replace(' ', '_').replace('×', 'x')}.csv", mime="text/csv")
     insight(f"Data terfilter berisi {len(f):,} transaksi pada {f['tanggal'].nunique()} hari aktif.",
             f"Rata-rata revenue harian {usd(harian['revenue'].mean())} dan rata-rata {harian['transaksi'].mean():,.0f} transaksi per hari.")
+
+# ---------------- Tab 6 ----------------
+# Hanya membaca file hasil train_models.py, tanpa torch/sklearn, supaya ringan di Streamlit Cloud.
+@st.cache_data
+def load_forecast():
+    return (pd.read_parquet(P.DATA_DIR / "forecast_results.parquet"), pd.read_csv(P.DATA_DIR / "model_metrics.csv"),
+            pd.read_csv(P.DATA_DIR / "lstm_loss.csv"), json.loads((P.DATA_DIR / "rf_tuning.json").read_text()))
+
+
+with tabs[5]:
+    if not (P.DATA_DIR / "forecast_results.parquet").exists():
+        st.info("Belum ada hasil model. Jalankan `python train_models.py` terlebih dahulu.")
+    else:
+        res, met, loss, tun = load_forecast()
+        names = {"aktual": "Aktual", "seasonal_naive": "Seasonal Naive", "random_forest": "Random Forest", "lstm": "LSTM"}
+        st.caption("Forecasting revenue **per jam per cabang**, 1 jam ke depan. Model dilatih pada Januari–Mei 2023 "
+                   "dan diuji pada Juni 2023. Tab ini tidak terpengaruh filter di sidebar.")
+
+        c1, c2 = st.columns(2)
+        cab = c1.selectbox("Cabang", ["Semua"] + sorted(res["store_location"].unique()))
+        models = c2.multiselect("Model", list(names.values())[1:], default=list(names.values())[1:])
+
+        st.subheader("Metrik di data test (Juni)")
+        lvl = st.radio("Level evaluasi", ["Per jam", "Per hari (prediksi jam dijumlahkan)"], horizontal=True)
+        m = met[(met["level"] == ("jam" if lvl == "Per jam" else "hari")) & (met["cabang"] == cab)].drop(columns=["level", "cabang"])
+        st.dataframe(m, hide_index=True, width="stretch", column_config={
+            "MAE": st.column_config.NumberColumn(format="dollar"), "RMSE": st.column_config.NumberColumn(format="dollar"),
+            "MAPE": st.column_config.NumberColumn("MAPE", format="%.1f%%")})
+        st.caption("MAE/RMSE dalam dolar (makin kecil makin baik). MAPE mengabaikan jam dengan revenue aktual 0. "
+                   "Untuk cabang \"Semua\", metrik dihitung atas seluruh baris jam/hari dari ketiga cabang.")
+
+        cols = ["aktual"] + [k for k, v in names.items() if v in models]
+        r = res if cab == "Semua" else res[res["store_location"] == cab]
+        mulai = pd.date_range("2023-06-01", "2023-06-30", freq="7D")
+        w0 = st.selectbox("Minggu di bulan Juni", mulai, format_func=lambda d: f"{tgl(d)} – {tgl(min(d + pd.Timedelta(days=6), mulai[-1] + pd.Timedelta(days=1)))}")
+        w = r[r["ts"].between(w0, w0 + pd.Timedelta(days=7), inclusive="left")].groupby("ts")[cols].sum()
+        w = w.reindex(pd.date_range(w0, w0 + pd.Timedelta(days=7), freq="h", inclusive="left"))  # jam tutup = celah di garis
+        fig = px.line(w.rename(columns=names).rename_axis("ts").reset_index().melt("ts", var_name="Model", value_name="Revenue"),
+                      x="ts", y="Revenue", color="Model", color_discrete_map=MODEL_COLORS,
+                      title=f"Aktual vs Prediksi per Jam · {cab}", labels={"ts": "Waktu"})
+        fig.update_traces(hovertemplate="%{y:$,.2f}")
+        show(style(fig, height=420))
+
+        d = r.groupby("tanggal")[cols].sum().rename(columns=names).reset_index().melt("tanggal", var_name="Model", value_name="Revenue")
+        fig = px.line(d, x="tanggal", y="Revenue", color="Model", markers=True, color_discrete_map=MODEL_COLORS,
+                      title=f"Aktual vs Prediksi per Hari (Juni) · {cab}", labels={"tanggal": "Tanggal"})
+        fig.update_traces(hovertemplate="%{y:$,.2f}")
+        show(style(fig))
+
+        lp = loss.melt("epoch", ["train_loss", "val_loss"], var_name="Data", value_name="Loss")
+        fig = px.line(lp.replace({"train_loss": "Train", "val_loss": "Validation"}), x="epoch", y="Loss", color="Data",
+                      color_discrete_map={"Train": BLUE, "Validation": "#eb6834"},
+                      title="Loss LSTM: Train vs Validation (MSE, skala ter-normalisasi)", labels={"epoch": "Epoch"})
+        best_ep = int(loss.loc[loss["best"], "epoch"].iloc[0])
+        fig.add_vline(x=best_ep, line_dash="dash", line_color=MUTED, annotation_text=f"Epoch terbaik ({best_ep})")
+        show(style(fig, y_money=False, height=340))
+
+        mj = met[(met["level"] == "jam") & (met["cabang"] == "Semua")].set_index("model")
+        mh = met[(met["level"] == "hari") & (met["cabang"] == "Semua")].set_index("model")
+        best = mj["RMSE"].idxmin()
+        bp = ", ".join(f"{k}={v}" for k, v in tun["best_params"].items())
+        runner = mj.drop(index=[best, "Seasonal Naive"])["RMSE"].idxmin()
+        gain = (1 - mj.loc[best, "RMSE"] / mj.loc["Seasonal Naive", "RMSE"]) * 100
+        insight(f"Model terbaik per jam adalah **{best}** (RMSE {usd(mj.loc[best, 'RMSE'])}, MAE {usd(mj.loc[best, 'MAE'])}), "
+                f"RMSE-nya {gain:.1f}% lebih kecil dibanding baseline seasonal naive.",
+                f"Selisihnya dengan {runner} hanya {usd(mj.loc[runner, 'RMSE'] - mj.loc[best, 'RMSE'])} RMSE, jadi keduanya hampir setara.",
+                f"Di level harian, model terbaik adalah **{mh['RMSE'].idxmin()}** (MAPE {mh.loc[mh['RMSE'].idxmin(), 'MAPE']:.1f}%).",
+                f"Tuning Random Forest dengan TimeSeriesSplit di data train memilih {bp}; RMSE test per jam berubah dari "
+                f"{usd(tun['test_rmse_default'])} (parameter awal) menjadi {usd(mj.loc['Random Forest', 'RMSE'])} "
+                f"({(mj.loc['Random Forest', 'RMSE'] / tun['test_rmse_default'] - 1) * 100:+.1f}%).",
+                "Seasonal naive menyalin satu jam dari minggu lalu apa adanya, termasuk hari yang tidak biasa, dan tidak mengikuti "
+                "tren naik. Model ML/DL memakai kondisi terbaru (lag 1 jam, rata-rata 24 jam) dan pola jam sibuk dari 5 bulan data.")

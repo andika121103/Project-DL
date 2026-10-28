@@ -1,0 +1,9 @@
+# Hanya untuk melatih ulang model (python train_models.py / notebooks/modeling.ipynb).
+# Dashboard di Streamlit Cloud cukup memakai requirements.txt.
+--extra-index-url https://download.pytorch.org/whl/cpu
+-r requirements.txt
+torch~=2.14.1
+scikit-learn~=1.9.1
+matplotlib~=3.11.2
+nbconvert
+ipykernel

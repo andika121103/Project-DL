@@ -41,8 +41,13 @@ def show(fig):
         st.plotly_chart(fig, width="stretch")
 
 
-def insight(*lines):
-    st.info("**Insight:** " + " ".join(lines).replace("$", r"\$"))  # cegah $...$ dibaca sebagai LaTeX
+def insight(*lines, saran=None):
+    text = "**Insight**\n\n" + "\n".join(f"- {l}" for l in lines if l) + (f"\n\n**💡 Saran:** {saran}" if saran else "")
+    st.info(text.replace("$", r"\$"))  # cegah $...$ dibaca sebagai LaTeX
+
+
+def pct(a, b) -> float:
+    return (a / b - 1) * 100
 
 
 # ---------------- Data & filter ----------------
@@ -125,15 +130,28 @@ with tabs[0]:
         st.caption("Bulan bertanda *(sebagian)* hanya tercakup sebagian oleh rentang tanggal: batangnya dipudarkan "
                    "dan MoM hanya ditampilkan untuk bulan lengkap yang bulan sebelumnya juga lengkap.")
 
-    best_m = bulanan.loc[bulanan["revenue"].idxmax()]
-    best_d = harian.loc[harian["revenue"].idxmax()]
-    lines = [f"Bulan dengan revenue tertinggi adalah **{best_m['nama_bulan']}** ({usd(best_m['revenue'])})."]
-    if len(bulanan) > 1:
-        first, last = bulanan.iloc[0], bulanan.iloc[-1]
-        lines.append(f"Dari {first['nama_bulan']} ke {last['nama_bulan']} revenue berubah "
-                     f"**{(last['revenue'] / first['revenue'] - 1) * 100:+.1f}%**.")
-    lines.append(f"Hari dengan penjualan tertinggi: **{tgl(best_d['tanggal'])}** ({usd(best_d['revenue'])}).")
-    insight(*lines)
+    # dinormalisasi per hari aktif, supaya bulan pendek (Februari) atau bulan sebagian tidak terlihat turun
+    pb = bulanan.set_index("nama_bulan")[["revenue", "transaksi"]].div(f.groupby("nama_bulan", observed=True)["tanggal"].nunique(), axis=0)
+    pb["atv"] = pb["revenue"] / pb["transaksi"]
+    best_d, worst_d = harian.loc[harian["revenue"].idxmax()], harian.loc[harian["revenue"].idxmin()]
+    lines, saran = [], None
+    if len(pb) > 1:
+        a, b = pb.iloc[0], pb.iloc[-1]
+        lines.append(f"Revenue per hari naik dari {usd(a['revenue'])} ({pb.index[0]}) ke {usd(b['revenue'])} ({pb.index[-1]}), "
+                     f"**{pct(b['revenue'], a['revenue']):+.1f}%**.")
+        lines.append(f"Penyebabnya adalah **jumlah transaksi**: {a['transaksi']:,.0f} → {b['transaksi']:,.0f} per hari "
+                     f"({pct(b['transaksi'], a['transaksi']):+.1f}%), sedangkan nilai per transaksi hampir tetap "
+                     f"({usd(a['atv'])} → {usd(b['atv'])}, {pct(b['atv'], a['atv']):+.1f}%).")
+        for (m0, r0), (m1, r1) in zip(bulanan[["nama_bulan", "revenue"]].values, bulanan[["nama_bulan", "revenue"]].values[1:]):
+            if r1 < r0 and pb.loc[m1, "revenue"] > pb.loc[m0, "revenue"]:
+                lines.append(f"Total {m1} turun {pct(r1, r0):.1f}% dari {m0} hanya karena jumlah harinya lebih sedikit; "
+                             f"per hari, revenue {m1} justru naik {pct(pb.loc[m1, 'revenue'], pb.loc[m0, 'revenue']):+.1f}%.")
+        if abs(pct(b["atv"], a["atv"])) < 5:
+            saran = ("Pertumbuhan datang dari pelanggan yang lebih banyak, bukan belanja yang lebih besar. Ruang berikutnya "
+                     "adalah menaikkan nilai per transaksi, misalnya paket kopi + bakery atau upsell ukuran Large.")
+    lines.append(f"Hari tertinggi **{tgl(best_d['tanggal'])}** ({usd(best_d['revenue'])}), terendah {tgl(worst_d['tanggal'])} "
+                 f"({usd(worst_d['revenue'])}).")
+    insight(*lines, saran=saran)
 
 # ---------------- Tab 2 ----------------
 with tabs[1]:
@@ -152,13 +170,27 @@ with tabs[1]:
         show(style(fig).update_layout(showlegend=False))
 
     top, bot = cabang.iloc[0], cabang.iloc[-1]
-    lines = [f"Cabang dengan revenue tertinggi adalah **{top['store_location']}** ({usd(top['revenue'])}, "
-             f"{top['revenue'] / cabang['revenue'].sum() * 100:.1f}% dari total)."]
-    if len(cabang) > 1:
-        lines.append(f"Selisihnya dengan cabang terendah ({bot['store_location']}) sebesar {usd(top['revenue'] - bot['revenue'])}.")
     atv = (cabang.assign(atv=cabang["revenue"] / cabang["transaksi"]).sort_values("atv", ascending=False).iloc[0])
-    lines.append(f"Rata-rata nilai per transaksi tertinggi ada di **{atv['store_location']}** ({usd(atv['atv'])}).")
-    insight(*lines)
+    lines = [f"Cabang dengan revenue tertinggi adalah **{top['store_location']}** ({usd(top['revenue'])}, "
+             f"{top['revenue'] / cabang['revenue'].sum() * 100:.1f}% dari total).",
+             f"Rata-rata nilai per transaksi tertinggi ada di **{atv['store_location']}** ({usd(atv['atv'])})."]
+    saran = None
+    if len(cabang) > 1:
+        gap = pct(top["revenue"], bot["revenue"])
+        lines.insert(1, f"Selisih dengan cabang terendah ({bot['store_location']}) hanya {usd(top['revenue'] - bot['revenue'])} "
+                        f"({gap:.1f}%), jadi performa ketiga cabang **{'relatif seimbang' if gap < 10 else 'cukup timpang'}**.")
+        cb = cabang_bulan.pivot(index="bulan", columns="store_location", values="revenue")
+        if len(cb) > 1:
+            g = pct(cb.iloc[-1], cb.iloc[0]).sort_values()
+            lines.append(f"Pertumbuhan {cabang_bulan['nama_bulan'].iloc[0]}–{cabang_bulan['nama_bulan'].iloc[-1]} tercepat di "
+                         f"**{g.index[-1]}** ({g.iloc[-1]:+.1f}%), paling lambat {g.index[0]} ({g.iloc[0]:+.1f}%).")
+        pagi = (f[f["jam"].between(7, 10)].groupby("store_location")["revenue"].sum()
+                / f.groupby("store_location")["revenue"].sum() * 100).sort_values()
+        lines.append(f"**{pagi.index[-1]}** paling bergantung pada jam pagi 07–10 ({pagi.iloc[-1]:.1f}% revenue), "
+                     f"sedangkan {pagi.index[0]} lebih merata sepanjang hari ({pagi.iloc[0]:.1f}%).")
+        saran = (f"Prioritaskan staf dan stok pagi di {pagi.index[-1]}; untuk cabang ini, promo siang/sore adalah cara "
+                 f"paling mudah menambah revenue di jam yang masih sepi.")
+    insight(*lines, saran=saran)
 
 # ---------------- Tab 3 ----------------
 with tabs[2]:
@@ -184,9 +216,19 @@ with tabs[2]:
     bj, bh = by_jam.loc[by_jam["revenue"].idxmax()], by_hari.loc[by_hari["revenue"].idxmax()]
     lh = by_hari.loc[by_hari["revenue"].idxmin()]
     pagi = f.loc[f["jam"].between(7, 10), "revenue"].sum() / f["revenue"].sum() * 100
-    insight(f"Jam tersibuk adalah **{int(bj['jam']):02d}:00–{int(bj['jam']) + 1:02d}:00** ({usd(bj['revenue'])}).",
-            f"Hari dengan revenue tertinggi **{bh['hari']}**, terendah **{lh['hari']}**.",
-            f"Sekitar **{pagi:.1f}%** revenue terjadi pada jam 07:00–10:59 (puncak pagi).")
+    lines = [f"Jam tersibuk adalah **{int(bj['jam']):02d}:00–{int(bj['jam']) + 1:02d}:00** ({usd(bj['revenue'])}).",
+             f"Sekitar **{pagi:.1f}%** revenue terjadi hanya dalam 4 jam pagi (07:00–10:59)."]
+    akhir_pekan = harian.groupby(harian["tanggal"].dt.dayofweek >= 5)["revenue"].mean()
+    datar = False
+    if len(akhir_pekan) == 2:
+        d = pct(akhir_pekan[True], akhir_pekan[False])
+        datar = abs(d) < 5
+        lines.append(f"Rata-rata revenue per hari akhir pekan {usd(akhir_pekan[True])} vs hari kerja {usd(akhir_pekan[False])} "
+                     f"({d:+.1f}%)" + (": **hampir sama**, jadi pola mingguan relatif datar." if datar else "."))
+    lines.append(f"Hari dengan total revenue tertinggi **{bh['hari']}**, terendah **{lh['hari']}**.")
+    insight(*lines, saran=("Yang perlu diatur adalah jam, bukan hari. " if datar else "")
+                          + f"Tambah kasir dan persiapan bahan sekitar jam {int(bj['jam']):02d}:00, "
+                            "dan pakai jam sepi untuk promo atau persiapan stok.")
 
 # ---------------- Tab 4 ----------------
 with tabs[3]:
@@ -215,10 +257,21 @@ with tabs[3]:
     show(style(fig, y_money=False, height=520).update_coloraxes(showscale=False))
 
     kc, tp = kategori.iloc[0], top10.iloc[0]
-    insight(f"Kategori **{kc['product_category']}** menyumbang revenue terbesar "
-            f"({usd(kc['revenue'])}, {kc['revenue'] / kategori['revenue'].sum() * 100:.1f}%).",
-            f"Produk terlaris berdasarkan revenue adalah **{tp['product_detail']}** ({usd(tp['revenue'])}).",
-            f"Top 10 produk menyumbang {top10['revenue'].sum() / f['revenue'].sum() * 100:.1f}% dari total revenue.")
+    share = kategori.set_index("product_category")["revenue"] / kategori["revenue"].sum() * 100
+    lines = [f"Kategori **{kc['product_category']}** menyumbang revenue terbesar "
+             f"({usd(kc['revenue'])}, {share.iloc[0]:.1f}%)."
+             + (f" Bersama **{share.index[1]}**, dua kategori ini mencakup **{share.iloc[:2].sum():.1f}%** revenue."
+                if len(share) > 2 else "")]
+    mix = f.groupby(["bulan", "product_category"])["revenue"].sum().unstack(fill_value=0)
+    if len(mix) > 1 and mix.shape[1] > 1:
+        lines.append(f"Komposisi kategori **stabil** dari bulan ke bulan: porsi tiap kategori bergeser paling banyak "
+                     f"{(mix.div(mix.sum(axis=1), axis=0) * 100).agg(lambda s: s.max() - s.min()).max():.1f} poin persen, "
+                     f"jadi kenaikan revenue terjadi merata di semua kategori.")
+    lines += [f"Produk terlaris berdasarkan revenue adalah **{tp['product_detail']}** ({usd(tp['revenue'])}).",
+              f"Top 10 dari {f['product_detail'].nunique()} produk menyumbang {top10['revenue'].sum() / f['revenue'].sum() * 100:.1f}% "
+              f"revenue, jadi penjualan tidak bergantung pada segelintir produk."]
+    insight(*lines, saran=f"Jaga ketersediaan {share.index[0]}" + (f" dan {share.index[1]}" if len(share) > 1 else "")
+                          + "; bundling dengan Bakery bisa menaikkan nilai per transaksi.")
 
 # ---------------- Tab 5 ----------------
 with tabs[4]:
@@ -301,12 +354,17 @@ with tabs[5]:
         bp = ", ".join(f"{k}={v}" for k, v in tun["best_params"].items())
         runner = mj.drop(index=[best, "Seasonal Naive"])["RMSE"].idxmin()
         gain = (1 - mj.loc[best, "RMSE"] / mj.loc["Seasonal Naive", "RMSE"]) * 100
+        hb = mh["RMSE"].idxmin()
         insight(f"Model terbaik per jam adalah **{best}** (RMSE {usd(mj.loc[best, 'RMSE'])}, MAE {usd(mj.loc[best, 'MAE'])}), "
                 f"RMSE-nya {gain:.1f}% lebih kecil dibanding baseline seasonal naive.",
                 f"Selisihnya dengan {runner} hanya {usd(mj.loc[runner, 'RMSE'] - mj.loc[best, 'RMSE'])} RMSE, jadi keduanya hampir setara.",
-                f"Di level harian, model terbaik adalah **{mh['RMSE'].idxmin()}** (MAPE {mh.loc[mh['RMSE'].idxmin(), 'MAPE']:.1f}%).",
+                f"Di level harian, model terbaik adalah **{hb}**: rata-rata meleset {mh.loc[hb, 'MAPE']:.1f}% dari revenue "
+                f"aktual per hari (MAPE).",
                 f"Tuning Random Forest dengan TimeSeriesSplit di data train memilih {bp}; RMSE test per jam berubah dari "
                 f"{usd(tun['test_rmse_default'])} (parameter awal) menjadi {usd(mj.loc['Random Forest', 'RMSE'])} "
                 f"({(mj.loc['Random Forest', 'RMSE'] / tun['test_rmse_default'] - 1) * 100:+.1f}%).",
                 "Seasonal naive menyalin satu jam dari minggu lalu apa adanya, termasuk hari yang tidak biasa, dan tidak mengikuti "
-                "tren naik. Model ML/DL memakai kondisi terbaru (lag 1 jam, rata-rata 24 jam) dan pola jam sibuk dari 5 bulan data.")
+                "tren naik. Model ML/DL memakai kondisi terbaru (lag 1 jam, rata-rata 24 jam) dan pola jam sibuk dari 5 bulan data.",
+                saran=f"Pakai {best} untuk memperkirakan kebutuhan staf dan stok per jam."
+                      + (" Model yang lebih sederhana dan cepat ini sudah sedikit lebih akurat dari LSTM, jadi Deep Learning "
+                         "belum memberi keuntungan di data sebesar ini." if best == "Random Forest" else ""))

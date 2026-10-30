@@ -17,6 +17,7 @@ Data mentah diagregasi per hari, minggu, bulan, cabang, kategori produk, serta p
 dalam dashboard interaktif berbasis **Streamlit + Plotly**, yang berisi:
 
 - Filter rentang tanggal, cabang, dan kategori produk. Semua grafik dan KPI mengikuti filter.
+- Pilihan metrik grafik: revenue, jumlah transaksi, atau item terjual (KPI, insight, dan tab Prediksi tetap memakai revenue).
 - KPI: total revenue, jumlah transaksi, rata-rata per transaksi, total item, dan pertumbuhan MoM.
 - 5 tab: **Tren Penjualan**, **Perbandingan Cabang**, **Pola Waktu**, **Produk**, **Data** (tabel + download CSV).
 - Insight otomatis di setiap tab yang dihitung langsung dari data.

@@ -61,6 +61,18 @@ stores = st.sidebar.multiselect("Cabang", sorted(df["store_location"].unique()),
                                 default=sorted(df["store_location"].unique()))
 cats = st.sidebar.multiselect("Kategori produk", sorted(df["product_category"].unique()),
                               default=sorted(df["product_category"].unique()))
+METRIK = {"Revenue ($)": ("revenue", "Revenue"), "Jumlah transaksi": ("transaksi", "Transaksi"),
+          "Item terjual": ("item", "Item Terjual")}
+col, lab = METRIK[st.sidebar.radio("Metrik grafik", list(METRIK))]
+st.sidebar.caption("Mengubah grafik di tab Tren, Cabang, Pola Waktu, dan Produk. "
+                   "KPI, insight, dan tab Prediksi tetap berdasarkan revenue.")
+is_rev = col == "revenue"
+hv = ":$,.2f" if is_rev else ":,.0f"  # format angka di hovertemplate
+
+
+def val(x) -> str:
+    return usd(x) if is_rev else f"{x:,.0f}"
+
 
 f = df[df["tanggal"].between(pd.Timestamp(start), pd.Timestamp(end))
        & df["store_location"].isin(stores) & df["product_category"].isin(cats)]
@@ -101,31 +113,31 @@ tabs = st.tabs(["📈 Tren Penjualan", "🏪 Perbandingan Cabang", "🕒 Pola Wa
 with tabs[0]:
     gran = st.radio("Granularitas", ["Harian", "Mingguan", "Bulanan"], horizontal=True)
     if gran == "Harian":
-        fig = px.line(harian, x="tanggal", y="revenue", title="Revenue Harian & Moving Average 7 Hari",
-                      color_discrete_sequence=[BLUE], labels={"tanggal": "Tanggal", "revenue": "Revenue"})
-        fig.data[0].name, fig.data[0].showlegend = "Revenue harian", True
+        fig = px.line(harian, x="tanggal", y=col, title=f"{lab} Harian & Moving Average 7 Hari",
+                      color_discrete_sequence=[BLUE], labels={"tanggal": "Tanggal", col: lab})
+        fig.data[0].name, fig.data[0].showlegend = f"{lab} harian", True
         fig.data[0].line.width = 1
         fig.data[0].opacity = 0.5
-        fig.add_scatter(x=harian["tanggal"], y=harian["ma7"], name="Moving average 7 hari",
+        fig.add_scatter(x=harian["tanggal"], y=P.moving_average(harian, col=col), name="Moving average 7 hari",
                         line=dict(color=BLUE, width=2.5))
     elif gran == "Mingguan":
-        fig = px.line(mingguan, x="minggu", y="revenue", markers=True, title="Revenue Mingguan",
-                      color_discrete_sequence=[BLUE], labels={"minggu": "Minggu mulai", "revenue": "Revenue"})
+        fig = px.line(mingguan, x="minggu", y=col, markers=True, title=f"{lab} Mingguan",
+                      color_discrete_sequence=[BLUE], labels={"minggu": "Minggu mulai", col: lab})
     else:
-        fig = px.line(bulanan, x="nama_bulan", y="revenue", markers=True, title="Revenue Bulanan",
-                      color_discrete_sequence=[BLUE], labels={"nama_bulan": "Bulan", "revenue": "Revenue"})
-    fig.update_traces(hovertemplate="%{y:$,.2f}")
-    show(style(fig))
+        fig = px.line(bulanan, x="nama_bulan", y=col, markers=True, title=f"{lab} Bulanan",
+                      color_discrete_sequence=[BLUE], labels={"nama_bulan": "Bulan", col: lab})
+    fig.update_traces(hovertemplate=f"%{{y{hv}}}")
+    show(style(fig, y_money=is_rev))
 
     full = bulanan["bulan"].isin(P.bulan_lengkap(start, end))
-    mom_ok = P.mom_pct_lengkap(bulanan, start, end)
-    lbl = [usd(r) + ("" if pd.isna(m) else f"<br>{m:+.1f}% MoM") for r, m in zip(bulanan["revenue"], mom_ok)]
+    mom_ok = P.mom_pct_lengkap(bulanan.assign(mom_pct=bulanan[col].pct_change() * 100), start, end)
+    lbl = [val(r) + ("" if pd.isna(m) else f"<br>{m:+.1f}% MoM") for r, m in zip(bulanan[col], mom_ok)]
     xb = bulanan.assign(nama_bulan=bulanan["nama_bulan"].astype(str) + full.map({True: "", False: " (sebagian)"}))
-    fig = px.bar(xb, x="nama_bulan", y="revenue", text=lbl, title="Revenue per Bulan (dengan pertumbuhan MoM)",
-                 color_discrete_sequence=[BLUE], labels={"nama_bulan": "Bulan", "revenue": "Revenue"})
-    fig.update_traces(textposition="outside", hovertemplate="%{x}: %{y:$,.2f}<extra></extra>", cliponaxis=False,
+    fig = px.bar(xb, x="nama_bulan", y=col, text=lbl, title=f"{lab} per Bulan (dengan pertumbuhan MoM)",
+                 color_discrete_sequence=[BLUE], labels={"nama_bulan": "Bulan", col: lab})
+    fig.update_traces(textposition="outside", hovertemplate=f"%{{x}}: %{{y{hv}}}<extra></extra>", cliponaxis=False,
                       marker_opacity=full.map({True: 1.0, False: 0.35}).tolist())
-    show(style(fig, height=420))
+    show(style(fig, y_money=is_rev, height=420))
     if not full.all():
         st.caption("Bulan bertanda *(sebagian)* hanya tercakup sebagian oleh rentang tanggal: batangnya dipudarkan "
                    "dan MoM hanya ditampilkan untuk bulan lengkap yang bulan sebelumnya juga lengkap.")
@@ -156,18 +168,19 @@ with tabs[0]:
 # ---------------- Tab 2 ----------------
 with tabs[1]:
     c1, c2 = st.columns([3, 2])
-    fig = px.line(cabang_bulan, x="nama_bulan", y="revenue", color="store_location", markers=True,
-                  color_discrete_map=STORE_COLORS, title="Tren Revenue Bulanan per Cabang",
-                  labels={"nama_bulan": "Bulan", "revenue": "Revenue", "store_location": "Cabang"})
-    fig.update_traces(hovertemplate="%{y:$,.2f}")
+    fig = px.line(cabang_bulan, x="nama_bulan", y=col, color="store_location", markers=True,
+                  color_discrete_map=STORE_COLORS, title=f"Tren {lab} Bulanan per Cabang",
+                  labels={"nama_bulan": "Bulan", col: lab, "store_location": "Cabang"})
+    fig.update_traces(hovertemplate=f"%{{y{hv}}}")
     with c1:
-        show(style(fig))
-    fig = px.bar(cabang, x="store_location", y="revenue", color="store_location", text=cabang["revenue"].map(usd),
-                 color_discrete_map=STORE_COLORS, title="Total Revenue per Cabang",
-                 labels={"store_location": "Cabang", "revenue": "Revenue"})
-    fig.update_traces(textposition="outside", cliponaxis=False, hovertemplate="%{x}: %{y:$,.2f}<extra></extra>")
+        show(style(fig, y_money=is_rev))
+    cs = cabang.sort_values(col, ascending=False)
+    fig = px.bar(cs, x="store_location", y=col, color="store_location", text=cs[col].map(val),
+                 color_discrete_map=STORE_COLORS, title=f"Total {lab} per Cabang",
+                 labels={"store_location": "Cabang", col: lab})
+    fig.update_traces(textposition="outside", cliponaxis=False, hovertemplate=f"%{{x}}: %{{y{hv}}}<extra></extra>")
     with c2:
-        show(style(fig).update_layout(showlegend=False))
+        show(style(fig, y_money=is_rev).update_layout(showlegend=False))
 
     top, bot = cabang.iloc[0], cabang.iloc[-1]
     atv = (cabang.assign(atv=cabang["revenue"] / cabang["transaksi"]).sort_values("atv", ascending=False).iloc[0])
@@ -194,24 +207,25 @@ with tabs[1]:
 
 # ---------------- Tab 3 ----------------
 with tabs[2]:
-    fig = px.imshow(heat, color_continuous_scale=SEQ, aspect="auto", title="Heatmap Revenue: Hari × Jam",
-                    labels=dict(x="Jam", y="Hari", color="Revenue"))
-    fig.update_traces(hovertemplate="%{y}, jam %{x}:00<br>%{z:$,.2f}<extra></extra>", xgap=2, ygap=2)
+    fig = px.imshow(P.heatmap_hari_jam(f, col), color_continuous_scale=SEQ, aspect="auto",
+                    title=f"Heatmap {lab}: Hari × Jam", labels=dict(x="Jam", y="Hari", color=lab))
+    fig.update_traces(hovertemplate=f"%{{y}}, jam %{{x}}:00<br>%{{z{hv}}}<extra></extra>", xgap=2, ygap=2)
     fig.update_xaxes(dtick=1)
-    show(style(fig, y_money=False, height=420).update_coloraxes(colorbar_tickprefix="$", colorbar_tickformat=",.0f"))
+    show(style(fig, y_money=False, height=420).update_coloraxes(colorbar_tickprefix="$" if is_rev else "",
+                                                                 colorbar_tickformat=",.0f"))
 
     c1, c2 = st.columns(2)
-    fig = px.bar(by_hari, x="hari", y="revenue", title="Revenue per Hari", color_discrete_sequence=[BLUE],
-                 labels={"hari": "Hari", "revenue": "Revenue"})
-    fig.update_traces(hovertemplate="%{x}: %{y:$,.2f}<extra></extra>")
+    fig = px.bar(by_hari, x="hari", y=col, title=f"{lab} per Hari", color_discrete_sequence=[BLUE],
+                 labels={"hari": "Hari", col: lab})
+    fig.update_traces(hovertemplate=f"%{{x}}: %{{y{hv}}}<extra></extra>")
     with c1:
-        show(style(fig))
-    fig = px.bar(by_jam, x="jam", y="revenue", title="Revenue per Jam", color_discrete_sequence=[BLUE],
-                 labels={"jam": "Jam", "revenue": "Revenue"})
-    fig.update_traces(hovertemplate="Jam %{x}:00: %{y:$,.2f}<extra></extra>")
+        show(style(fig, y_money=is_rev))
+    fig = px.bar(by_jam, x="jam", y=col, title=f"{lab} per Jam", color_discrete_sequence=[BLUE],
+                 labels={"jam": "Jam", col: lab})
+    fig.update_traces(hovertemplate=f"Jam %{{x}}:00: %{{y{hv}}}<extra></extra>")
     fig.update_xaxes(dtick=1)
     with c2:
-        show(style(fig))
+        show(style(fig, y_money=is_rev))
 
     bj, bh = by_jam.loc[by_jam["revenue"].idxmax()], by_hari.loc[by_hari["revenue"].idxmax()]
     lh = by_hari.loc[by_hari["revenue"].idxmin()]
@@ -233,27 +247,26 @@ with tabs[2]:
 # ---------------- Tab 4 ----------------
 with tabs[3]:
     c1, c2 = st.columns(2)
-    fig = px.bar(kategori.sort_values("revenue"), x="revenue", y="product_category", orientation="h",
-                 title="Revenue per Kategori Produk", color_discrete_sequence=[BLUE],
-                 labels={"product_category": "Kategori", "revenue": "Revenue"})
-    fig.update_traces(hovertemplate="%{y}: %{x:$,.2f}<extra></extra>")
-    fig = style(fig, y_money=False).update_xaxes(tickprefix="$", tickformat=",.0f", showgrid=True,
-                                                gridcolor="rgba(128,128,128,0.2)")
+    xfmt = dict(tickprefix="$" if is_rev else "", tickformat=",.0f", showgrid=True, gridcolor="rgba(128,128,128,0.2)")
+    fig = px.bar(kategori.sort_values(col), x=col, y="product_category", orientation="h",
+                 title=f"{lab} per Kategori Produk", color_discrete_sequence=[BLUE],
+                 labels={"product_category": "Kategori", col: lab})
+    fig.update_traces(hovertemplate=f"%{{y}}: %{{x{hv}}}<extra></extra>")
+    fig = style(fig, y_money=False).update_xaxes(**xfmt)
     with c1:
         show(fig)
-    fig = px.bar(top10.sort_values("revenue"), x="revenue", y="product_detail", orientation="h",
-                 title="Top 10 Produk (Revenue)", color_discrete_sequence=[BLUE], hover_data=["product_category"],
-                 labels={"product_detail": "Produk", "revenue": "Revenue", "product_category": "Kategori"})
-    fig = style(fig, y_money=False).update_xaxes(tickprefix="$", tickformat=",.0f", showgrid=True,
-                                                gridcolor="rgba(128,128,128,0.2)")
+    fig = px.bar(P.top_produk(f, by=col).sort_values(col), x=col, y="product_detail", orientation="h",
+                 title=f"Top 10 Produk ({lab})", color_discrete_sequence=[BLUE], hover_data=["product_category"],
+                 labels={"product_detail": "Produk", col: lab, "product_category": "Kategori"})
+    fig = style(fig, y_money=False).update_xaxes(**xfmt)
     with c2:
         show(fig)
 
     tm = P.per_kategori_tipe(f)
-    fig = px.treemap(tm, path=[px.Constant("Semua"), "product_category", "product_type"], values="revenue",
-                     color="revenue", color_continuous_scale=SEQ, title="Treemap Revenue: Kategori → Tipe Produk")
-    fig.update_traces(hovertemplate="%{label}<br>%{value:$,.2f}<br>%{percentRoot:.1%} dari total<extra></extra>",
-                      texttemplate="%{label}<br>%{value:$,.0f}")
+    fig = px.treemap(tm, path=[px.Constant("Semua"), "product_category", "product_type"], values=col,
+                     color=col, color_continuous_scale=SEQ, title=f"Treemap {lab}: Kategori → Tipe Produk")
+    fig.update_traces(hovertemplate=f"%{{label}}<br>%{{value{hv}}}<br>%{{percentRoot:.1%}} dari total<extra></extra>",
+                      texttemplate="%{label}<br>%{value" + (":$,.0f" if is_rev else ":,.0f") + "}")
     show(style(fig, y_money=False, height=520).update_coloraxes(showscale=False))
 
     kc, tp = kategori.iloc[0], top10.iloc[0]

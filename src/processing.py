@@ -144,9 +144,9 @@ def mom_pct_lengkap(bulanan: pd.DataFrame, start, end) -> pd.Series:
     return bulanan["mom_pct"].where(full & full.shift(fill_value=False) & bulanan["bulan"].diff().eq(1))
 
 
-def moving_average(harian: pd.DataFrame, window: int = 7) -> pd.Series:
-    """Moving average revenue harian (min_periods=1 agar awal periode tetap terisi)."""
-    return harian["revenue"].rolling(window, min_periods=1).mean()
+def moving_average(harian: pd.DataFrame, window: int = 7, col: str = "revenue") -> pd.Series:
+    """Moving average harian (min_periods=1 agar awal periode tetap terisi)."""
+    return harian[col].rolling(window, min_periods=1).mean()
 
 
 def per_cabang_bulan(df):
@@ -161,8 +161,8 @@ def per_kategori(df):
     return _agg(df, "product_category").sort_values("revenue", ascending=False)
 
 
-def top_produk(df, n: int = 10):
-    return _agg(df, ["product_detail", "product_category"]).nlargest(n, "revenue")
+def top_produk(df, n: int = 10, by: str = "revenue"):
+    return _agg(df, ["product_detail", "product_category"]).nlargest(n, by)
 
 
 def per_kategori_tipe(df):
@@ -177,10 +177,11 @@ def per_jam(df):
     return _agg(df, "jam")
 
 
-def heatmap_hari_jam(df) -> pd.DataFrame:
-    """Pivot total revenue: baris = hari (Senin–Minggu), kolom = jam."""
-    return df.pivot_table(index="hari", columns="jam", values="revenue",
-                          aggfunc="sum", fill_value=0, observed=False)
+def heatmap_hari_jam(df, col: str = "revenue") -> pd.DataFrame:
+    """Pivot total `col` (revenue / transaksi / item): baris = hari (Senin–Minggu), kolom = jam."""
+    values = {"revenue": "revenue", "transaksi": "transaction_id", "item": "transaction_qty"}[col]
+    return df.pivot_table(index="hari", columns="jam", values=values,
+                          aggfunc="count" if col == "transaksi" else "sum", fill_value=0, observed=False)
 
 
 def avg_transaction_value(df) -> float:

@@ -8,9 +8,5 @@ venv/
 Thumbs.db
 ~$*.xlsx
 
-# Dataset mentah tidak di-commit; dashboard memakai data/coffee_sales.parquet
-data/*.xlsx
-data/*.csv
-# Hasil model dibutuhkan dashboard saat deploy
-!data/model_metrics.csv
-!data/lstm_loss.csv
+# Dataset mentah tidak di-commit; dashboard memakai data/processed/coffee_sales.parquet
+data/raw/

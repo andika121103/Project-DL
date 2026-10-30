@@ -4,13 +4,16 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "data"
+RAW_DIR = DATA_DIR / "raw"
+RESULTS_DIR = ROOT / "results"  # hasil train_models.py, dibaca tab Prediksi
 HARI = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni",
          "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
 
 
-PARQUET = DATA_DIR / "coffee_sales.parquet"
+PARQUET = DATA_DIR / "processed" / "coffee_sales.parquet"
 
 
 def _find_file() -> Path:
@@ -21,9 +24,9 @@ def _find_file() -> Path:
 
 
 def _find_raw_file() -> Path:
-    files = sorted(DATA_DIR.glob("*.xlsx")) + sorted(DATA_DIR.glob("*.csv"))
+    files = sorted(RAW_DIR.glob("*.xlsx")) + sorted(RAW_DIR.glob("*.csv"))
     if not files:
-        raise FileNotFoundError(f"Tidak ada file .parquet/.xlsx/.csv di {DATA_DIR}")
+        raise FileNotFoundError(f"Tidak ada {PARQUET} maupun file .xlsx/.csv di {RAW_DIR}")
     return files[0]
 
 
@@ -62,7 +65,8 @@ def load_data(path: str | Path | None = None) -> pd.DataFrame:
 
 
 def convert_to_parquet() -> Path:
-    """Simpan data mentah yang sudah diparsing ke data/coffee_sales.parquet."""
+    """Simpan data mentah yang sudah diparsing ke data/processed/coffee_sales.parquet."""
+    PARQUET.parent.mkdir(exist_ok=True)
     load_data(_find_raw_file()).to_parquet(PARQUET, index=False)
     return PARQUET
 
@@ -190,7 +194,7 @@ if __name__ == "__main__":
 
     # Self-check: parquet (jika ada) identik dengan Excel, dan total agregasi = sum(qty * unit_price) mentah
     raw = load_data()
-    if PARQUET.exists() and any(DATA_DIR.glob("*.xlsx")) | any(DATA_DIR.glob("*.csv")):  # clone dari git tanpa Excel
+    if PARQUET.exists() and any(RAW_DIR.glob("*.xlsx")) | any(RAW_DIR.glob("*.csv")):  # clone dari git tanpa Excel
         pd.testing.assert_frame_equal(raw, load_data(_find_raw_file()), check_dtype=False)
     data = add_features(raw)
     expected = (raw["transaction_qty"] * raw["unit_price"]).sum()

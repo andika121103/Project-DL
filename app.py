@@ -25,6 +25,8 @@ def tgl(d) -> str:
 
 def style(fig, y_money=True, height=380):
     fig.update_layout(height=height, margin=dict(l=10, r=10, t=90, b=10), title_y=0.97,
+                      font_family="Inter, sans-serif", title_font=dict(size=16, weight=600),
+                      paper_bgcolor="rgba(0,0,0,0)",
                       plot_bgcolor="rgba(0,0,0,0)", hovermode="x unified" if fig.data and fig.data[0].type == "scatter" else "closest",
                       legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0, title=None))
     fig.update_xaxes(showgrid=False)
@@ -35,7 +37,8 @@ def style(fig, y_money=True, height=380):
 
 
 def show(fig):
-    st.plotly_chart(fig, width="stretch")
+    with st.container(border=True):
+        st.plotly_chart(fig, width="stretch")
 
 
 def insight(*lines):
@@ -72,16 +75,20 @@ by_hari, by_jam, heat = P.per_hari_nama(f), P.per_jam(f), P.heatmap_hari_jam(f)
 # ---------------- KPI ----------------
 mom = P.mom_bulan_lengkap(bulanan, start, end)
 k = st.columns(5)
-k[0].metric("Total Revenue", usd(f["revenue"].sum()))
-k[1].metric("Jumlah Transaksi", f"{len(f):,}")
-k[2].metric("Rata-rata per Transaksi", usd(P.avg_transaction_value(f)))
-k[3].metric("Total Item Terjual", f"{int(f['transaction_qty'].sum()):,}")
+spark = dict(border=True, chart_type="area")  # sparkline = tren mingguan dalam rentang filter
+rev = f["revenue"].sum()
+k[0].metric("Total Revenue", f"${rev / 1e3:,.1f}K" if rev >= 1e5 else usd(rev), help=usd(rev),
+            chart_data=mingguan["revenue"], **spark)
+k[1].metric("Transaksi", f"{len(f):,}", chart_data=mingguan["transaksi"], **spark)
+k[2].metric("Nilai/Transaksi", usd(P.avg_transaction_value(f)), help="Rata-rata revenue per transaksi",
+            chart_data=mingguan["revenue"] / mingguan["transaksi"], **spark)
+k[3].metric("Item Terjual", f"{int(f['transaction_qty'].sum()):,}", chart_data=mingguan["item"], **spark)
+mom_spark = dict(border=True, chart_type="bar", chart_data=bulanan["revenue"])
 if mom:
-    k[4].metric(f"Pertumbuhan MoM ({mom[1]} vs {mom[2]})", f"{mom[0]:+.1f}%",
-                help="Hanya membandingkan bulan yang seluruh harinya tercakup dalam rentang filter.")
+    k[4].metric("MoM", f"{mom[0]:+.1f}%", **mom_spark,
+                help=f"{mom[1]} vs {mom[2]}. Hanya membandingkan bulan yang seluruh harinya tercakup dalam rentang filter.")
 else:
-    k[4].metric("Pertumbuhan MoM", "—")
-    k[4].caption("Butuh minimal 2 bulan penuh dalam rentang tanggal.")
+    k[4].metric("MoM", "—", **mom_spark, help="Butuh minimal 2 bulan penuh dalam rentang tanggal.")
 
 tabs = st.tabs(["📈 Tren Penjualan", "🏪 Perbandingan Cabang", "🕒 Pola Waktu", "🥐 Produk", "📋 Data", "🔮 Prediksi"])
 
@@ -236,12 +243,12 @@ with tabs[4]:
 # Hanya membaca file hasil train_models.py, tanpa torch/sklearn, supaya ringan di Streamlit Cloud.
 @st.cache_data
 def load_forecast():
-    return (pd.read_parquet(P.DATA_DIR / "forecast_results.parquet"), pd.read_csv(P.DATA_DIR / "model_metrics.csv"),
-            pd.read_csv(P.DATA_DIR / "lstm_loss.csv"), json.loads((P.DATA_DIR / "rf_tuning.json").read_text()))
+    return (pd.read_parquet(P.RESULTS_DIR / "forecast_results.parquet"), pd.read_csv(P.RESULTS_DIR / "model_metrics.csv"),
+            pd.read_csv(P.RESULTS_DIR / "lstm_loss.csv"), json.loads((P.RESULTS_DIR / "rf_tuning.json").read_text()))
 
 
 with tabs[5]:
-    if not (P.DATA_DIR / "forecast_results.parquet").exists():
+    if not (P.RESULTS_DIR / "forecast_results.parquet").exists():
         st.info("Belum ada hasil model. Jalankan `python train_models.py` terlebih dahulu.")
     else:
         res, met, loss, tun = load_forecast()

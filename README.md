@@ -26,16 +26,26 @@ dalam dashboard interaktif berbasis **Streamlit + Plotly**, yang berisi:
 ```
 analisis-data-kelompok04/
 ├── data/
-│   ├── coffee_sales.parquet     # dataset siap pakai (dibaca dashboard, cepat)
-│   ├── Coffee Shop Sales.xlsx   # dataset asli dari Kaggle (fallback, tidak di-commit)
-│   ├── forecast_results.parquet # prediksi test Juni ketiga model (dibaca tab Prediksi)
+│   ├── raw/                     # Coffee Shop Sales.xlsx asli dari Kaggle (fallback, tidak di-commit)
+│   └── processed/
+│       └── coffee_sales.parquet # dataset siap pakai (dibaca dashboard, cepat)
+├── models/
+│   ├── ml/                      # random_forest.joblib
+│   └── dl/                      # lstm.pt, lstm_config.json
+├── results/                     # hasil train_models.py, dibaca tab Prediksi
+│   ├── forecast_results.parquet # prediksi test Juni ketiga model
 │   ├── model_metrics.csv        # MAE/RMSE/MAPE per model × cabang
-│   ├── lstm_loss.csv            # riwayat loss train vs validation LSTM
+│   ├── lstm_loss.csv / .png     # riwayat loss train vs validation LSTM
 │   └── rf_tuning.json           # parameter terbaik Random Forest hasil TimeSeriesSplit
-├── models/                      # random_forest.joblib, lstm.pt, lstm_config.json, lstm_loss.png
 ├── src/
 │   ├── processing.py            # load, cleaning, feature engineering, agregasi
-│   └── forecasting.py           # forecasting per jam: seasonal naive, Random Forest, LSTM
+│   └── forecasting/             # forecasting revenue per jam
+│       ├── __init__.py          # run(): pipeline lengkap (dipanggil train_models.py)
+│       ├── data.py              # deret per jam, fitur lag, split train/test
+│       ├── baseline.py          # seasonal naive
+│       ├── ml_random_forest.py  # Machine Learning: Random Forest + tuning
+│       ├── dl_lstm.py           # Deep Learning: LSTM (PyTorch)
+│       └── evaluate.py          # gabung prediksi, MAE/RMSE/MAPE
 ├── notebooks/
 │   ├── eda.ipynb                # analisis langkah demi langkah (bahan laporan)
 │   └── modeling.ipynb           # penjelasan & hasil Machine Learning / Deep Learning
@@ -72,7 +82,7 @@ streamlit run app.py
 Dashboard akan terbuka di `http://localhost:8501`. Pemuatan data pertama sekitar 1,5 detik dari file parquet
 (sekitar 9,5 detik jika hanya ada file Excel). Setelah itu data di-cache (`@st.cache_data`) sehingga perubahan filter terasa cepat.
 
-`load_data()` membaca `data/coffee_sales.parquet` jika ada, dan otomatis kembali ke file Excel/CSV jika tidak ada.
+`load_data()` membaca `data/processed/coffee_sales.parquet` jika ada, dan otomatis kembali ke file Excel/CSV di `data/raw/` jika tidak ada.
 Untuk membuat ulang file parquet dari Excel (misalnya setelah dataset diganti), jalankan:
 
 ```bash
@@ -111,14 +121,14 @@ pip install -r requirements-train.txt
 python train_models.py
 ```
 
-Hasilnya ditulis ke `data/forecast_results.parquet`, `data/model_metrics.csv`, `data/lstm_loss.csv`, `data/rf_tuning.json`, dan folder `models/`.
+Model ditulis ke `models/ml/` dan `models/dl/`, sedangkan prediksi, metrik, dan loss ke folder `results/`.
 Tab **Prediksi** di dashboard hanya membaca file-file tersebut, jadi deploy tidak membutuhkan torch/scikit-learn.
 
 ## Deploy ke Streamlit Community Cloud
 
-1. Upload folder proyek ke repository GitHub (publik atau privat), **termasuk** file `data/coffee_sales.parquet`
+1. Upload folder proyek ke repository GitHub (publik atau privat), **termasuk** file `data/processed/coffee_sales.parquet` dan folder `results/`
    (±2 MB). File ini sengaja tidak di-ignore oleh `.gitignore` karena dibutuhkan saat deploy. File Excel (±9 MB)
-   di-ignore; unduh dari Kaggle ke `data/` jika ingin membuat ulang parquet.
+   di-ignore; unduh dari Kaggle ke `data/raw/` jika ingin membuat ulang parquet.
 2. Buka [share.streamlit.io](https://share.streamlit.io) dan login dengan akun GitHub.
 3. Klik **Create app** → **Deploy a public app from GitHub**.
 4. Pilih repository dan branch, lalu isi *Main file path* dengan `app.py`. Di *Advanced settings* pilih Python 3.13.
